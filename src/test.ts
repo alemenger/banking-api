@@ -11,33 +11,42 @@ const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
 async function main() {
-  // 1) Buscar el usuario existente
+  // 1) Encontrar el user
   const user = await prisma.user.findUnique({
     where: { email: "ale@test.com" },
   });
+  if (!user) throw new Error("User not found");
 
-  if (!user) {
-    throw new Error("User not found. Run the user creation first.");
-  }
-
-  // 2) Crear cuenta para ese user (la relación es por userId)
-  const account = await prisma.account.create({
-    data: {
-      userId: user.id,
-      currency: "CAD",
-      balance: 0,
-    },
-  });
-
-  console.log("ACCOUNT CREATED:", account);
-
-  // 3) Ver todas las cuentas del usuario
-  const accounts = await prisma.account.findMany({
+  // 2) Tomar la primera cuenta del user
+  const account = await prisma.account.findFirst({
     where: { userId: user.id },
+    orderBy: { createdAt: "asc" },
+  });
+  if (!account) throw new Error("Account not found for user");
+
+  const amount = 100; // depósito de 100 CAD
+
+  // 3) Hacer depósito de forma atómica (DB transaction)
+  const result = await prisma.$transaction(async (tx) => {
+    const createdTx = await tx.transaction.create({
+      data: {
+        toAccountId: account.id,
+        type: "DEPOSIT",
+        amount, // Prisma lo guarda como Decimal
+        memo: "Initial deposit",
+      },
+    });
+
+    const updatedAccount = await tx.account.update({
+      where: { id: account.id },
+      data: { balance: { increment: amount } },
+    });
+
+    return { createdTx, updatedAccount };
   });
 
-  console.log("ALL ACCOUNTS FOR USER:", accounts);
-
+  console.log("DEPOSIT TX:", result.createdTx);
+  console.log("UPDATED ACCOUNT:", result.updatedAccount);
 }
 
 main()
